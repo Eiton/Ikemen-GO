@@ -19,12 +19,18 @@ uniform sampler2D metallicRoughnessMap;
 uniform sampler2D ambientOcclusionMap;
 uniform sampler2D shadowMap[8];
 uniform samplerCube shadowCubeMap[8];
+uniform samplerCube lambertianEnvSampler;
+uniform samplerCube GGXEnvSampler;
+uniform sampler2D GGXLUT;
+uniform float environmentIntensity;
+uniform mat3 environmentRotation;
+uniform int mipCount;
 
 uniform vec3 cameraPosition;
 
 uniform vec4 baseColorFactor;
 uniform vec2 metallicRoughness;
-uniform float ambientOcclusion;
+uniform float ambientOcclusionStrength;
 uniform float farPlane;
 uniform bool unlit;
 
@@ -218,6 +224,57 @@ vec3 BRDF_specularGGX(vec3 f0, vec3 f90, float alphaRoughness, float specularWei
 
     return specularWeight * F * Vis * D;
 }
+vec3 getDiffuseLight(vec3 n)
+{
+    return textureCube(lambertianEnvSampler, environmentRotation * n).rgb * environmentIntensity;
+    //return vec3(1.5);
+}
+vec4 getSpecularSample(vec3 reflection, float lod)
+{
+    return textureCubeLod(GGXEnvSampler, environmentRotation * reflection, lod) * environmentIntensity;
+    //return vec4(0);
+}
+vec3 getIBLGGXFresnel(vec3 n, vec3 v, float roughness, vec3 F0, float specularWeight)
+{
+    // see https://bruop.github.io/ibl/#single_scattering_results at Single Scattering Results
+    // Roughness dependent fresnel, from Fdez-Aguera
+    float NdotV = clampedDot(n, v);
+    vec2 brdfSamplePoint = clamp(vec2(NdotV, roughness), vec2(0.0, 0.0), vec2(1.0, 1.0));
+    vec2 f_ab = texture2D(GGXLUT, brdfSamplePoint).rg;
+    vec3 Fr = max(vec3(1.0 - roughness), F0) - F0;
+    vec3 k_S = F0 + Fr * pow(1.0 - NdotV, 5.0);
+    vec3 FssEss = specularWeight * (k_S * f_ab.x + f_ab.y);
+
+    // Multiple scattering, from Fdez-Aguera
+    float Ems = (1.0 - (f_ab.x + f_ab.y));
+    vec3 F_avg = specularWeight * (F0 + (1.0 - F0) / 21.0);
+    vec3 FmsEms = Ems * FssEss * F_avg / (1.0 - F_avg * Ems);
+
+    return FssEss + FmsEms;
+}
+vec3 getIBLRadianceGGX(vec3 n, vec3 v, float roughness)
+{
+    float NdotV = clampedDot(n, v);
+    float lod = roughness * float(mipCount - 1);
+    vec3 reflection = normalize(reflect(-v, n));
+    vec4 specularSample = getSpecularSample(reflection, lod);
+
+    vec3 specularLight = specularSample.rgb;
+
+    return specularLight;
+}
+vec3 ibl(vec3 n,vec3 v,float metallic,float roughness,vec3 albedo){
+    vec3 f_diffuse = getDiffuseLight(n) * albedo.rgb;
+    vec3 f_specular_metal = getIBLRadianceGGX(n, v, roughness);
+    vec3 f_specular_dielectric = f_specular_metal;
+    vec3 f_metal_fresnel_ibl = getIBLGGXFresnel(n, v, roughness, albedo.rgb, 1.0);
+    vec3 f_metal_brdf_ibl = f_metal_fresnel_ibl * f_specular_metal;
+    vec3 f_dielectric_fresnel_ibl = getIBLGGXFresnel(n, v, roughness, vec3(0.04), 1);
+    vec3 f_dielectric_brdf_ibl = f_diffuse*(1-f_dielectric_fresnel_ibl) + f_specular_dielectric * f_dielectric_fresnel_ibl;
+
+    vec3 color = f_dielectric_brdf_ibl*(1-metallic)+f_metal_brdf_ibl*metallic;
+    return color;
+}
 vec3 pbr(vec3 worldSpacePos,vec3 v,vec3 n,vec3 albedo,float metallic,float roughness,float ao,Light lights[4]){
 	vec3 f0 = vec3(0.04)+(albedo-vec3(0.04))*metallic;
     vec3 f90 = vec3(1.0);
@@ -226,7 +283,6 @@ vec3 pbr(vec3 worldSpacePos,vec3 v,vec3 n,vec3 albedo,float metallic,float rough
     vec3 f_specular = vec3(0.0);
     vec3 f_diffuse = vec3(0.0);
     vec3 c_diff = albedo*(1-metallic);
-    //mix(info.baseColor.rgb,  vec3(0), info.metallic);
 
 	for(int i = 0; i < 8; ++i) 
     {
@@ -242,13 +298,11 @@ vec3 pbr(vec3 worldSpacePos,vec3 v,vec3 n,vec3 albedo,float metallic,float rough
             float NdotL = clampedDot(n, l);
             float NdotV = clampedDot(n, v);
             float NdotH = clampedDot(n, h);
-            //float LdotH = clampedDot(l, h);
             float VdotH = clampedDot(v, h);
             if (NdotL > 0.0 || NdotV > 0.0){
                 vec3 intensity = getLighIntensity(lights[i], pointToLight);
                 vec3 l_diffuse = vec3(0.0);
                 vec3 l_specular = vec3(0.0);
-                //l_diffuse += 0.1*intensity * NdotL;
                 l_diffuse += intensity * NdotL *  BRDF_lambertian(f0, f90, c_diff, specularWeight, VdotH);
                 l_specular += intensity * NdotL * BRDF_specularGGX(f0, f90, roughness*roughness, specularWeight, VdotH, NdotL, NdotV, NdotH);
                 float shadow = 1;
@@ -257,20 +311,22 @@ vec3 pbr(vec3 worldSpacePos,vec3 v,vec3 n,vec3 albedo,float metallic,float rough
                 }else{
                     shadow = ShadowCalculation(i,lightSpacePos[i]);
                 }
-                f_diffuse += l_diffuse * shadow;//
+                f_diffuse += l_diffuse * shadow;
                 f_specular += l_specular * shadow;
             }
         }
     }   
-
-    vec3 color = clamp(f_diffuse+f_specular,0,1);
-    //color += albedo*0.2;
+    vec3 f_ibl = vec3(0);
+    if(environmentIntensity > 0){
+        f_ibl = ibl(n,v,metallic,roughness,albedo);
+    }
+    //vec3 color = clamp(f_diffuse+f_specular+ao*f_ibl,0,1);
+    vec3 color = f_diffuse+f_specular+ao*f_ibl;
     
     //color = color / (color + vec3(1.0));
     //color = pow(color, vec3(1.0/2.2));
 	return color;
 }
-
 vec3 hue_shift(vec3 color, float dhue) {
 	float s = sin(dhue);
 	float c = cos(dhue);
@@ -295,18 +351,17 @@ void main(void) {
         }
         vec2 metallicRoughnessF = metallicRoughness;
         if(useMetallicRoughnessMap){
-            metallicRoughnessF = texture2D(metallicRoughnessMap, texcoord).rg;
+            metallicRoughnessF = texture2D(metallicRoughnessMap, texcoord).bg;
+        }
+        float ambientOcclusion = 1;
+        if(ambientOcclusionStrength > 0){
+            ambientOcclusion = 1+ambientOcclusionStrength*(texture2D(ambientOcclusionMap, texcoord).r-1);
         }
         gl_FragColor.rgb = pbr(worldSpacePos,normalize(cameraPosition - worldSpacePos),normalize(normalF),gl_FragColor.rgb,metallicRoughnessF[0],metallicRoughnessF[1],ambientOcclusion,lights);
         //gl_FragColor.rgb *= ShadowCalculation(lightSpacePos);
     }
     gl_FragColor.rgb *= vColor.a;
     gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(1.0/2.2));
-    //gl_FragColor.rgb = vec3(textureCube(shadowCubeMap[0], -(lights[0].position - worldSpacePos)).r)*12;
-    //gl_FragColor.rgb = texture2D(shadowMap[0], lightSpacePos[0].xy/lightSpacePos[0].w*0.5+vec2(0.5)).rgb;
-    //gl_FragColor.rgb = vec3(lightSpacePos[0].z/lightSpacePos[0].w*0.5+0.5);
-    //normalF = normalize(normalF);
-    //gl_FragColor.rgb = vec3((normalF.x+1)*0.5,(normalF.y+1)*0.5,(normalF.z+1)*0.5);
 	if(!enableAlpha){
 		if(gl_FragColor.a < alphaThreshold){
 			discard;

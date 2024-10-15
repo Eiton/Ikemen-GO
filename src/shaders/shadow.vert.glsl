@@ -1,7 +1,8 @@
 #extension GL_EXT_gpu_shader4 : enable
 uniform mat4 model;
 uniform sampler2D jointMatrices;
-uniform highp sampler2D morphTargetValues;
+//uniform highp sampler2D morphTargetValues;
+uniform sampler2D morphTargetValues;
 uniform int numJoints;
 uniform int numTargets;
 uniform vec4 morphTargetWeight[2];

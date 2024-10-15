@@ -39,9 +39,13 @@ github.com/jfreymuth/oggvorbis v1.0.2/go.mod h1:hTCEBUJIOM8voBYPIa/TZima67oFAM1e
 github.com/jfreymuth/vorbis v1.0.1 h1:iA3VC/w+H0rHzPVrv1dkwxMMjk3LJTlSXlpYw6800u0=
 github.com/jfreymuth/vorbis v1.0.1/go.mod h1:DoftRo4AznKnShRl1GxiTFCseHr4zR9BN3TWXyuzrqQ=
 github.com/lucasb-eyer/go-colorful v1.0.2/go.mod h1:0MS4r+7BZKSJ5mw4/S5MPN+qHFF1fYclkSPilDOKW0s=
+github.com/lucasb-eyer/go-colorful v1.2.0 h1:1nnpGOrhyZZuNyfu1QjKiUICQ74+3FNCN69Aj6K7nkY=
+github.com/lucasb-eyer/go-colorful v1.2.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/lukegb/dds v0.0.0-20190402175749-8b7170e64003 h1:6g1XsQmpC332a2qx+qkrEVBHeNucWaiXHIUBKW4W62s=
 github.com/lukegb/dds v0.0.0-20190402175749-8b7170e64003/go.mod h1:hOrxKmZfUO2QXaqXIlrVqNdeBIFpNBb6uBzWsP9VwDw=
 github.com/mattn/go-runewidth v0.0.4/go.mod h1:LwmH8dsx7+W8Uxz3IHJYH5QSwggIsqBzpuz5H//U1FU=
+github.com/mdouchement/hdr v0.2.4 h1:k0ojx7smWvWw8En2BjUnb144j48gAExu5mv+ogNrkTc=
+github.com/mdouchement/hdr v0.2.4/go.mod h1:uezK2oUhYtoRLkTD0J4ryiOsu/oWLjRXx0I/92mIRmQ=
 github.com/mewkiz/flac v1.0.7/go.mod h1:yU74UH277dBUpqxPouHSQIar3G1X/QIclVbFahSd1pU=
 github.com/mewkiz/pkg v0.0.0-20190919212034-518ade7978e2/go.mod h1:3E2FUC/qYUfM8+r9zAwpeHJzqRVVMIYnpzD/clwWxyA=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

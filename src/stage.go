@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	_ "github.com/lukegb/dds"
+	"github.com/mdouchement/hdr"
+	_ "github.com/mdouchement/hdr/codec/rgbe"
 
 	mgl "github.com/go-gl/mathgl/mgl32"
 	"github.com/qmuntal/gltf"
@@ -1110,6 +1112,20 @@ func loadStage(def string, main bool) (*Stage, error) {
 				}
 			}
 		}
+		if err = sec[0].LoadFile("environment", []string{def, "", sys.motifDir, "data/"}, func(filename string) error {
+			env, err := loadEnvironment(filename)
+			if err != nil {
+				return err
+			}
+			var intensity float32
+			if sec[0].ReadF32("environmentintensity", &intensity) {
+				env.environmentIntensity = intensity
+			}
+			s.model.environment = env
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 	}
 	reflect := true
 	if sec = defmap[fmt.Sprintf("%v.shadow", sys.language)]; len(sec) > 0 {
@@ -1690,13 +1706,15 @@ type Model struct {
 	vertexBuffer        []byte
 	elementBuffer       []uint32
 	lights              []GLTFLight
+	environment         *Environment
 	//lightNodes           []int32
 	//lightNodesForeground []int32
 }
 type Scene struct {
-	nodes      []uint32
-	name       string
-	lightNodes []uint32
+	nodes           []uint32
+	name            string
+	lightNodes      []uint32
+	imageBasedLight *uint32
 }
 
 type LightType byte
@@ -1719,6 +1737,7 @@ type GLTFLight struct {
 	outerConeAngle float32
 	lightType      LightType
 }
+
 type GLTFAnimationType byte
 
 const (
@@ -1770,11 +1789,11 @@ type Material struct {
 	alphaCutoff               float32
 	textureIndex              *uint32
 	normalMapIndex            *uint32
-	ambientOcclutionMapIndex  *uint32
+	ambientOcclusionMapIndex  *uint32
 	metallicRoughnessMapIndex *uint32
 	baseColorFactor           [4]float32
 	doubleSided               bool
-	ambientOcclution          float32
+	ambientOcclusion          float32
 	metallic                  float32
 	roughness                 float32
 	unlit                     bool
@@ -1874,6 +1893,76 @@ var gltfPrimitiveModeMap = map[gltf.PrimitiveMode]PrimitiveMode{
 	gltf.PrimitiveTriangleFan:   TRIANGLE_FAN,
 }
 
+type Environment struct {
+	hdrTexture            *GLTFTexture
+	cubeMapTexture        *GLTFTexture
+	lambertianTexture     *GLTFTexture
+	GGXTexture            *GLTFTexture
+	GGXLUT                *GLTFTexture
+	init                  bool
+	lambertianSampleCount int32
+	GGXSampleCount        int32
+	GGXLUTSampleCount     int32
+	mipmapLevels          int32
+	environmentIntensity  float32
+}
+
+func loadEnvironment(filepath string) (*Environment, error) {
+	env := &Environment{}
+	env.init = true
+	env.lambertianSampleCount = 2048
+	env.GGXSampleCount = 1024
+	env.GGXLUTSampleCount = 512
+	env.environmentIntensity = 1
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, err
+	}
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+	env.hdrTexture = &GLTFTexture{}
+	env.cubeMapTexture = &GLTFTexture{}
+	env.lambertianTexture = &GLTFTexture{}
+	env.GGXTexture = &GLTFTexture{}
+	env.GGXLUT = &GLTFTexture{}
+	if hdrImg, ok := img.(hdr.Image); ok {
+		size := img.Bounds().Max.X * img.Bounds().Max.Y * 3
+		data := make([]float32, size, size)
+		bounds := img.Bounds()
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				color := hdrImg.HDRAt(x, y)
+				r, g, b, _ := color.HDRRGBA()
+				data = append(data, float32(r), float32(g), float32(b))
+			}
+		}
+		for i, j := 0, len(data)-3; i < j; i, j = i+3, j-3 {
+			data[i], data[i+1], data[i+2], data[j], data[j+1], data[j+2] = data[j], data[j+1], data[j+2], data[i], data[i+1], data[i+2]
+		}
+		sys.mainThreadTask <- func() {
+			env.hdrTexture.tex = newHDRTexture(int32(img.Bounds().Max.X), int32(img.Bounds().Max.Y))
+
+			env.hdrTexture.tex.SetRGBPixelData(data)
+			env.cubeMapTexture.tex = newCubeMapTexture(256, true)
+			env.lambertianTexture.tex = newCubeMapTexture(256, false)
+			env.GGXTexture.tex = newCubeMapTexture(256, true)
+			env.GGXLUT.tex = newDataTexture(1024, 1024)
+
+			gfx.RenderCubeMap(env.hdrTexture.tex, env.cubeMapTexture.tex, env.cubeMapTexture.tex.width)
+			gfx.RenderFilteredCubeMap(0, env.cubeMapTexture.tex, env.lambertianTexture.tex, env.lambertianTexture.tex.width, 0, env.lambertianSampleCount, 0)
+			lowestMipLevel := int32(4)
+			env.mipmapLevels = int32(Floor(float32(math.Log2(256)))) + 1 - lowestMipLevel
+			for i := int32(0); i < env.mipmapLevels; i++ {
+				roughness := float32(i) / float32((env.mipmapLevels - 1))
+				gfx.RenderFilteredCubeMap(1, env.cubeMapTexture.tex, env.GGXTexture.tex, env.GGXTexture.tex.width, int32(i), env.GGXSampleCount, roughness)
+			}
+			gfx.RenderLUT(1, env.cubeMapTexture.tex, env.GGXLUT.tex, env.GGXLUT.tex.width, env.GGXLUTSampleCount)
+		}
+	}
+	return env, nil
+}
 func loadglTFStage(filepath string) (*Model, error) {
 	mdl := &Model{offset: [3]float32{0, 0, 0}, rotation: [3]float32{0, 0, 0}, scale: [3]float32{1, 1, 1}}
 	doc, err := gltf.Open(filepath)
@@ -2008,7 +2097,13 @@ func loadglTFStage(filepath string) (*Model, error) {
 		material.baseColorFactor = *m.PBRMetallicRoughness.BaseColorFactor
 		material.roughness = *m.PBRMetallicRoughness.RoughnessFactor
 		material.metallic = *m.PBRMetallicRoughness.MetallicFactor
-		//material.ambientOcclution = *m.OcclusionTexture.Strength
+		if m.OcclusionTexture != nil {
+			material.ambientOcclusionMapIndex = new(uint32)
+			*material.ambientOcclusionMapIndex = *m.OcclusionTexture.Index
+			material.ambientOcclusion = *m.OcclusionTexture.Strength
+		} else {
+			material.ambientOcclusion = 0
+		}
 		material.name = m.Name
 		material.alphaMode, _ = map[gltf.AlphaMode]AlphaMode{
 			gltf.AlphaOpaque: AlphaModeOpaque,
@@ -2587,7 +2682,6 @@ func loadglTFStage(filepath string) (*Model, error) {
 		for _, n := range s.Nodes {
 			scene.getSceneLight(n, mdl.nodes)
 		}
-
 		mdl.scenes = append(mdl.scenes, scene)
 	}
 	return mdl, nil
@@ -2789,6 +2883,7 @@ func drawNode(mdl *Model, scene *Scene, n *Node, camOffset [3]float32, drawBlend
 			gfx.SetModelUniformI("numVertices", int(p.numVertices))
 			//gfx.SetModelUniformF("ambientOcclusion", 1)
 			gfx.SetModelUniformF("metallicRoughness", mat.metallic, mat.roughness)
+			gfx.SetModelUniformF("ambientOcclusionStrength", mat.ambientOcclusion)
 
 			gfx.SetModelUniformF("cameraPosition", -camOffset[0], -camOffset[1], -camOffset[2])
 
@@ -2838,6 +2933,9 @@ func drawNode(mdl *Model, scene *Scene, n *Node, camOffset [3]float32, drawBlend
 				gfx.SetModelUniformI("useMetallicRoughnessMap", 1)
 			} else {
 				gfx.SetModelUniformI("useMetallicRoughnessMap", 0)
+			}
+			if index := mat.ambientOcclusionMapIndex; index != nil {
+				gfx.SetModelTexture("ambientOcclusionMap", mdl.textures[*index].tex)
 			}
 			gfx.RenderElements(mode, int(p.numIndices), int(p.elementBufferOffset))
 
@@ -2902,11 +3000,9 @@ func (s *Stage) drawModel(pos [2]float32, yofs float32, scl float32, sceneNumber
 	if s.model == nil || len(s.model.scenes) <= sceneNumber {
 		return
 	}
-
 	drawFOV := s.stageCamera.fov * math.Pi / 180
 
 	var posMul float32 = float32(math.Tan(float64(drawFOV)/2)) * -s.model.offset[2] / (float32(sys.scrrect[3]) / 2)
-
 	var syo float32
 	aspectCorrection := (float32(sys.cam.zoffset)*float32(sys.gameHeight)/float32(sys.cam.localcoord[1]) - (float32(sys.cam.zoffset)*s.localscl - sys.cam.aspectcorrection))
 	syo = -(float32(s.stageCamera.zoffset) - float32(sys.cam.localcoord[1])/2) * (1 - scl) / scl * float32(sys.gameHeight) / float32(s.stageCamera.localcoord[1])
@@ -2977,8 +3073,11 @@ func (s *Stage) drawModel(pos [2]float32, yofs float32, scl float32, sceneNumber
 		}
 		gfx.ReleaseShadowPipeline()
 	}
-	gfx.prepareModelPipeline()
-
+	if s.model.environment != nil {
+		gfx.prepareModelPipeline(s.model.environment)
+	} else {
+		gfx.prepareModelPipeline(nil)
+	}
 	gfx.SetModelUniformMatrix("projection", proj[:])
 	gfx.SetModelUniformMatrix("view", view[:])
 	gfx.SetModelUniformF("farPlane", 50)
@@ -3017,7 +3116,7 @@ func (s *Stage) drawModel(pos [2]float32, yofs float32, scl float32, sceneNumber
 
 			}
 		}
-	} else {
+	} else if s.model.environment == nil {
 		unlit = true
 	}
 	for _, index := range scene.nodes {
