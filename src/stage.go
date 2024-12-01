@@ -3209,7 +3209,13 @@ func (s *Stage) drawModel(pos [2]float32, yofs float32, scl float32, sceneNumber
 	}
 	if len(scene.lightNodes) > 0 && sceneNumber == 0 && gfx.enableShadow {
 		gfx.prepareShadowMapPipeline()
-		for i := 0; i < int(Min(int32(len(scene.lightNodes)), 4)); i++ {
+		for i := 0; i < 4; i++ {
+			if i >= len(scene.lightNodes) {
+				if GL_SHADER_VER >= 130 {
+					gfx.SetShadowMapUniformI("lightType["+strconv.Itoa(i)+"]", 0)
+					continue
+				}
+			}
 			light := s.model.nodes[scene.lightNodes[i]]
 			shadowMapNear := float32(0.1)
 			if s.model.lights[*light.lightIndex].lightType == DirectionalLight {
@@ -3248,7 +3254,6 @@ func (s *Stage) drawModel(pos [2]float32, yofs float32, scl float32, sceneNumber
 			}
 			if s.model.lights[*light.lightIndex].lightType == PointLight {
 				gfx.SetShadowFrameCubeTexture(uint32(i))
-				gfx.SetShadowMapUniformI("layerOffset", i*6)
 				var lightMatrices [8]mgl.Mat4
 				lightMatrices[0] = lightProj.Mul4(mgl.LookAtV([3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14]}, [3]float32{light.worldTransform[12] + 1, light.worldTransform[13], light.worldTransform[14]}, [3]float32{0, -1, 0}))
 				lightMatrices[1] = lightProj.Mul4(mgl.LookAtV([3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14]}, [3]float32{light.worldTransform[12] - 1, light.worldTransform[13], light.worldTransform[14]}, [3]float32{0, -1, 0}))
@@ -3256,26 +3261,62 @@ func (s *Stage) drawModel(pos [2]float32, yofs float32, scl float32, sceneNumber
 				lightMatrices[3] = lightProj.Mul4(mgl.LookAtV([3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14]}, [3]float32{light.worldTransform[12], light.worldTransform[13] - 1, light.worldTransform[14]}, [3]float32{0, 0, -1}))
 				lightMatrices[4] = lightProj.Mul4(mgl.LookAtV([3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14]}, [3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14] + 1}, [3]float32{0, -1, 0}))
 				lightMatrices[5] = lightProj.Mul4(mgl.LookAtV([3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14]}, [3]float32{light.worldTransform[12], light.worldTransform[13], light.worldTransform[14] - 1}, [3]float32{0, -1, 0}))
-				for j := 0; j < 6; j++ {
-					gfx.SetShadowMapUniformMatrix("lightMatrices["+strconv.Itoa(j)+"]", lightMatrices[j][:])
+				if GL_SHADER_VER < 130 {
+					for j := 0; j < 6; j++ {
+						gfx.SetShadowMapUniformMatrix("lightMatrices["+strconv.Itoa(j)+"]", lightMatrices[j][:])
+					}
+					gfx.SetShadowMapUniformI("lightType[0]", 2)
+				} else {
+					for j := 0; j < 6; j++ {
+						gfx.SetShadowMapUniformMatrix("lightMatrices["+strconv.Itoa(i*6+j)+"]", lightMatrices[j][:])
+					}
+					gfx.SetShadowMapUniformI("lightType["+strconv.Itoa(i)+"]", 2)
 				}
-				gfx.SetShadowMapUniformI("lightType", 1)
+
 				gfx.SetShadowMapUniformF("farPlane", shadowMapFar)
 				//gfx.SetShadowMapUniformF("lightPos", light.worldTransform[12], light.worldTransform[13], light.worldTransform[14])
 			} else {
 				gfx.SetShadowFrameTexture(uint32(i))
 				lightView := mgl.LookAtV([3]float32{light.localTransform[12], light.localTransform[13], light.localTransform[14]}, [3]float32{light.localTransform[12] + light.lightDirection[0], light.localTransform[13] + light.lightDirection[1], light.localTransform[14] + light.lightDirection[2]}, [3]float32{0, 1, 0})
 				lightMatrix := lightProj.Mul4(lightView)
-				gfx.SetShadowMapUniformMatrix("lightMatrices[0]", lightMatrix[:])
 				gfx.SetShadowMapUniformF("farPlane", shadowMapFar)
-				if s.model.lights[*light.lightIndex].lightType == DirectionalLight {
-					gfx.SetShadowMapUniformI("lightType", 0)
+				if GL_SHADER_VER < 130 {
+					gfx.SetShadowMapUniformMatrix("lightMatrices[0]", lightMatrix[:])
+					if s.model.lights[*light.lightIndex].lightType == DirectionalLight {
+						gfx.SetShadowMapUniformI("lightType[0]", 1)
+					} else {
+						gfx.SetShadowMapUniformI("lightType[0]", 3)
+					}
 				} else {
-					gfx.SetShadowMapUniformI("lightType", 2)
+					gfx.SetShadowMapUniformMatrix("lightMatrices["+strconv.Itoa(i*6)+"]", lightMatrix[:])
+					if s.model.lights[*light.lightIndex].lightType == DirectionalLight {
+						gfx.SetShadowMapUniformI("lightType["+strconv.Itoa(i)+"]", 1)
+					} else {
+						gfx.SetShadowMapUniformI("lightType["+strconv.Itoa(i)+"]", 3)
+					}
 				}
 			}
-			gfx.SetShadowMapUniformF("lightPos", light.worldTransform[12], light.worldTransform[13], light.worldTransform[14])
-
+			if GL_SHADER_VER < 130 {
+				gfx.SetShadowMapUniformF("lightPos[0]", light.worldTransform[12], light.worldTransform[13], light.worldTransform[14])
+				for _, index := range scene.nodes {
+					drawNode(s.model, scene, s.model.nodes[index], offset, false, true, false)
+				}
+				for _, index := range scene.nodes {
+					drawNode(s.model, scene, s.model.nodes[index], offset, true, true, false)
+				}
+				if len(s.model.scenes) > 1 {
+					for _, index := range scene.nodes {
+						drawNode(s.model, s.model.scenes[1], s.model.nodes[index], offset, false, true, false)
+					}
+					for _, index := range scene.nodes {
+						drawNode(s.model, s.model.scenes[1], s.model.nodes[index], offset, true, true, false)
+					}
+				}
+			} else {
+				gfx.SetShadowMapUniformF("lightPos["+strconv.Itoa(i)+"]", light.worldTransform[12], light.worldTransform[13], light.worldTransform[14])
+			}
+		}
+		if GL_SHADER_VER >= 130 {
 			for _, index := range scene.nodes {
 				drawNode(s.model, scene, s.model.nodes[index], offset, false, true, false)
 			}

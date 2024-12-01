@@ -6,9 +6,8 @@
 #define COMPAT_TEXTURE_CUBE_LOD textureLod
 out vec4 FragColor;
 #ifdef ENABLE_SHADOW
-uniform sampler2DArray shadowMap;
 uniform samplerCubeArray shadowCubeMap;
-#define COMPAT_SHADOW_MAP_TEXTURE() texture(shadowMap,vec3(xy,index)).r
+#define COMPAT_SHADOW_MAP_TEXTURE() texture(shadowCubeMap,vec4(1.0, -(xy.y*2-1),-(xy.x*2-1),index)).r
 #define COMPAT_SHADOW_CUBE_MAP_TEXTURE() texture(shadowCubeMap,vec4(xyz,index)).r
 #endif
 #else

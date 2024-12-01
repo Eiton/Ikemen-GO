@@ -11,28 +11,30 @@ uniform bool enableAlpha;
 uniform bool useTexture;
 uniform float alphaThreshold;
 uniform vec4 baseColorFactor;
-uniform int lightType;
-uniform vec3 lightPos;
+uniform vec3 lightPos[4];
+uniform int lightType[4];
 uniform float farPlane;
 COMPAT_VARYING vec4 FragPos;
-COMPAT_VARYING vec4 vColor0;
+COMPAT_VARYING float vColorAlpha;
 COMPAT_VARYING vec2 texcoord0;
+flat COMPAT_VARYING int lightIndex;
 
-const int LightType_Directional = 0;
-const int LightType_Point = 1;
-const int LightType_Spot = 2;
+const int LightType_None = 0;
+const int LightType_Directional = 1;
+const int LightType_Point = 2;
+const int LightType_Spot = 3;
 void main()
 {
     vec4 color = baseColorFactor;
     if(useTexture){
         color = color * COMPAT_TEXTURE(tex, texcoord0);
     }
-    color *= vColor0;
+    color.a *= vColorAlpha;
     if((enableAlpha && color.a <= 0) || (color.a < alphaThreshold)){
         discard;
     }
-    if(lightType != LightType_Directional){
-        float lightDistance = length(FragPos.xyz - lightPos);
+    if(lightType[lightIndex] != LightType_Directional){
+        float lightDistance = length(FragPos.xyz - lightPos[lightIndex]);
     
         lightDistance = lightDistance / farPlane;
         
