@@ -2393,14 +2393,14 @@ func systemScriptInit(l *lua.LState) {
 	})
 	luaRegister(l, "sffNew", func(l *lua.LState) int {
 		if !nilArg(l, 1) {
-			sff, err := loadSff(strArg(l, 1), false)
+			sff, err := loadSff(strArg(l, 1), SffTypeOther)
 			if err != nil {
 				l.RaiseError("\nCan't load %v: %v\n", strArg(l, 1), err.Error())
 			}
 			sys.runMainThreadTask()
 			l.Push(newUserData(l, sff))
 		} else {
-			l.Push(newUserData(l, newSff()))
+			l.Push(newUserData(l, newSff(SffTypeOther)))
 		}
 		return 1
 	})

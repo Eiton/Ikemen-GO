@@ -247,8 +247,11 @@ type System struct {
 	keyString               string
 	timerCount              []int32
 	cmdFlags                map[string]string
+	palTexture              PalTexture
 	whitePalTex             Texture
 	usePalette              bool
+	SpriteTextureAtlas
+
 	//FLAC_FrameWait          int
 	// Localcoord sceenpack
 	luaLocalcoord    [2]int32
@@ -448,9 +451,10 @@ func (s *System) init(w, h int32) *lua.LState {
 	for i := 1; i < 256; i++ {
 		whitepal[i] = 0xffffffff // White (and full alpha)
 	}
-	s.whitePalTex = gfx.newPaletteTexture()
+	CreatePalTexture(2048)
+	s.whitePalTex = NewPaletteTexture()
 	s.whitePalTex.SetData(pal32ToBytes(whitepal))
-
+	s.SpriteTextureAtlas.textureSize = 2048
 	systemScriptInit(l)
 	s.shortcutScripts = make(map[ShortcutKey]*ShortcutScript)
 	// So now that we have a window we add an icon.
@@ -3712,7 +3716,7 @@ func (s *Select) addChar(defLine string) {
 		listSpr[k] = true
 	}
 
-	tempSff := newSff()
+	tempSff := newSff(SffTypeOther)
 	LoadFile(&cns_orig, []string{sc.def, "", "data/"}, func(filename string) error {
 		str, err := LoadText(filename)
 		if err != nil {
@@ -3768,7 +3772,7 @@ func (s *Select) addChar(defLine string) {
 		LoadFile(&resolvedSpritePath, []string{sc.def, "", "data/"}, func(file string) error {
 			var selPal []int32
 			var err_sff error
-			sc.sff, selPal, err_sff = preloadSff(file, true, listSpr)
+			sc.sff, selPal, err_sff = preloadSff(file, SffTypeChar, listSpr)
 			if err_sff != nil {
 				return fmt.Errorf("failed to preload SFF %s for %s: %w", file, sc.def, err_sff)
 			}
@@ -3782,7 +3786,7 @@ func (s *Select) addChar(defLine string) {
 			return nil
 		})
 	} else {
-		sc.sff = newSff()
+		sc.sff = newSff(SffTypeChar)
 		sc.anims.updateSff(sc.sff)
 		for k := range s.charSpritePreload {
 			sc.anims.addSprite(sc.sff, k[0], k[1])
@@ -3996,7 +4000,7 @@ func (s *Select) AddStage(def string) error {
 		for k := range s.stageSpritePreload {
 			listSpr[[...]uint16{k[0], k[1]}] = true
 		}
-		sff := newSff()
+		sff := newSff(SffTypeStage)
 		// preload animations
 		i = 0
 		at := ReadAnimationTable(sff, &sff.palList, lines, &i)
@@ -4013,7 +4017,7 @@ func (s *Select) AddStage(def string) error {
 		// preload portion of sff file
 		LoadFile(&spr, []string{def, "", "data/"}, func(file string) error {
 			var err error
-			ss.sff, _, err = preloadSff(file, false, listSpr)
+			ss.sff, _, err = preloadSff(file, SffTypeStage, listSpr)
 			if err != nil {
 				panic(fmt.Errorf("failed to load %v: %v\nerror preloading %v", file, err, def))
 			}

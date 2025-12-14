@@ -156,30 +156,51 @@ type Texture_GL21 struct {
 	width  int32
 	height int32
 	depth  int32
+	offset [2]int32
+	uvst   [4]float32
 	filter bool
 	handle uint32
 }
 
 // Generate a new texture name
-func (r *Renderer_GL21) newTexture(width, height, depth int32, filter bool) (t Texture) {
+func (r *Renderer_GL21) newTexture(width, height, depth int32, filter bool) Texture {
 	var h uint32
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.GenTextures(1, &h)
-	t = &Texture_GL21{width, height, depth, filter, h}
-	format := t.(*Texture_GL21).MapInternalFormat(Max(depth, 8))
-	gl.BindTexture(gl.TEXTURE_2D, h)
+	t := &Texture_GL21{width, height, depth, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, filter, h}
+	format := t.MapInternalFormat(Max(depth, 8))
+	gfx.(*Renderer_GL21).BindCurrent2DTexture(h)
+	var interp int32 = gl.NEAREST
+	if filter {
+		interp = gl.LINEAR
+	}
 	gl.TexImage2D(gl.TEXTURE_2D, 0, int32(format), width, height, 0, format, gl.UNSIGNED_BYTE, nil)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, interp)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, interp)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 	runtime.SetFinalizer(t, func(t *Texture_GL21) {
 		sys.mainThreadTask <- func() {
 			gl.DeleteTextures(1, &t.handle)
 		}
 	})
-	return
+	return t
 }
 
-func (r *Renderer_GL21) newPaletteTexture() Texture {
-	return r.newTexture(256, 1, 32, false)
+func (r *Renderer_GL21) newPaletteTexture(slot [2]uint32, offset [2]int32, uvst [4]float32) Texture {
+	t := &Texture_GL21{256, 1, 32, offset, uvst, false, 0}
+	t.handle = (*(sys.palTexture.textures[slot[0]])).(*Texture_GL21).handle
+	runtime.SetFinalizer(t, func(t *Texture_GL21) {
+		sys.mainThreadTask <- func() {
+			sys.palTexture.emptySlot.PushFront(slot)
+		}
+	})
+	return t
+}
+
+func (r *Renderer_GL21) newSubTexture(tex Texture, width, height int32, uvst [4]float32) Texture {
+	t := &Texture_GL21{width, height, tex.(*Texture_GL21).depth, [2]int32{0, 0}, uvst, tex.(*Texture_GL21).filter, tex.(*Texture_GL21).handle}
+	return t
 }
 
 func (r *Renderer_GL21) newModelTexture(width, height, depth int32, filter bool) Texture {
@@ -190,13 +211,13 @@ func (r *Renderer_GL21) newDataTexture(width, height int32) (t Texture) {
 	var h uint32
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.GenTextures(1, &h)
-	t = &Texture_GL21{width, height, 128, false, h}
+	t = &Texture_GL21{width, height, 128, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, false, h}
 	runtime.SetFinalizer(t, func(t *Texture_GL21) {
 		sys.mainThreadTask <- func() {
 			gl.DeleteTextures(1, &t.handle)
 		}
 	})
-	gl.BindTexture(gl.TEXTURE_2D, h)
+	gfx.(*Renderer_GL21).BindCurrent2DTexture(h)
 	//gl.TexImage2D(gl.TEXTURE_2D, 0, 32, t.width, t.height, 0, 36, gl.FLOAT, nil)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
@@ -208,13 +229,13 @@ func (r *Renderer_GL21) newHDRTexture(width, height int32) (t Texture) {
 	var h uint32
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.GenTextures(1, &h)
-	t = &Texture_GL21{width, height, 96, false, h}
+	t = &Texture_GL21{width, height, 96, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, false, h}
 	runtime.SetFinalizer(t, func(t *Texture_GL21) {
 		sys.mainThreadTask <- func() {
 			gl.DeleteTextures(1, &t.handle)
 		}
 	})
-	gl.BindTexture(gl.TEXTURE_2D, h)
+	gfx.(*Renderer_GL21).BindCurrent2DTexture(h)
 
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
@@ -226,13 +247,13 @@ func (r *Renderer_GL21) newCubeMapTexture(widthHeight int32, mipmap bool, lowest
 	var h uint32
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.GenTextures(1, &h)
-	t = &Texture_GL21{widthHeight, widthHeight, 24, false, h}
+	t = &Texture_GL21{widthHeight, widthHeight, 24, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, false, h}
 	runtime.SetFinalizer(t, func(t *Texture_GL21) {
 		sys.mainThreadTask <- func() {
 			gl.DeleteTextures(1, &t.handle)
 		}
 	})
-	gl.BindTexture(gl.TEXTURE_CUBE_MAP, h)
+	gfx.(*Renderer_GL21).BindCurrentCubeTexture(h)
 	for i := 0; i < 6; i++ {
 		gl.TexImage2D(uint32(gl.TEXTURE_CUBE_MAP_POSITIVE_X+i), 0, gl.RGB32F_ARB, widthHeight, widthHeight, 0, gl.RGB, gl.FLOAT, nil)
 	}
@@ -251,25 +272,7 @@ func (r *Renderer_GL21) newCubeMapTexture(widthHeight int32, mipmap bool, lowest
 
 // Bind a texture and upload texel data to it
 func (t *Texture_GL21) SetData(data []byte) {
-	var interp int32 = gl.NEAREST
-	if t.filter {
-		interp = gl.LINEAR
-	}
-
-	format := t.MapInternalFormat(Max(t.depth, 8))
-
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
-	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
-	if data != nil {
-		gl.TexImage2D(gl.TEXTURE_2D, 0, int32(format), t.width, t.height, 0, format, gl.UNSIGNED_BYTE, unsafe.Pointer(&data[0]))
-	} else {
-		gl.TexImage2D(gl.TEXTURE_2D, 0, int32(format), t.width, t.height, 0, format, gl.UNSIGNED_BYTE, nil)
-	}
-
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, interp)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, interp)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	t.SetSubData(data, t.offset[0], t.offset[1], t.width, t.height)
 }
 func (t *Texture_GL21) SetSubData(data []byte, x, y, width, height int32) {
 	var interp int32 = gl.NEAREST
@@ -279,7 +282,7 @@ func (t *Texture_GL21) SetSubData(data []byte, x, y, width, height int32) {
 
 	format := t.MapInternalFormat(Max(t.depth, 8))
 
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
+	gfx.(*Renderer_GL21).BindCurrent2DTexture(t.handle)
 	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	if data != nil {
 		gl.TexSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, uint32(format), gl.UNSIGNED_BYTE, unsafe.Pointer(&data[0]))
@@ -296,7 +299,7 @@ func (t *Texture_GL21) SetDataG(data []byte, mag, min, ws, wt TextureSamplingPar
 
 	format := t.MapInternalFormat(Max(t.depth, 8))
 
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
+	gfx.(*Renderer_GL21).BindCurrent2DTexture(t.handle)
 	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	gl.TexImage2D(gl.TEXTURE_2D, 0, int32(format), t.width, t.height, 0, format, gl.UNSIGNED_BYTE, unsafe.Pointer(&data[0]))
 	gl.GenerateMipmap(gl.TEXTURE_2D)
@@ -308,7 +311,7 @@ func (t *Texture_GL21) SetDataG(data []byte, mag, min, ws, wt TextureSamplingPar
 func (t *Texture_GL21) SetPixelData(data []float32) {
 	format := t.MapInternalFormat(Max(t.depth/4, 8))
 	internalFormat := t.MapInternalFormat(Max(t.depth, 8))
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
+	gfx.(*Renderer_GL21).BindCurrent2DTexture(t.handle)
 	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	gl.TexImage2D(gl.TEXTURE_2D, 0, int32(internalFormat), t.width, t.height, 0, uint32(format), gl.FLOAT, unsafe.Pointer(&data[0]))
 }
@@ -328,6 +331,10 @@ func (t *Texture_GL21) GetWidth() int32 {
 
 func (t *Texture_GL21) GetHeight() int32 {
 	return t.height
+}
+
+func (t *Texture_GL21) GetUV() [4]float32 {
+	return t.uvst
 }
 
 func (t *Texture_GL21) MapInternalFormat(i int32) uint32 {
@@ -393,6 +400,9 @@ type Renderer_GL21 struct {
 	GL21State
 }
 type GL21State struct {
+	program             uint32
+	textureIndex        int
+	textures            [32]uint32
 	depthTest           bool
 	depthMask           bool
 	invertFrontFace     bool
@@ -507,7 +517,7 @@ func (r *Renderer_GL21) Init() {
 	r.spriteShader, _ = r.newShaderProgram(vertShader, fragShader, "", "Main Shader", true)
 	r.spriteShader.RegisterAttributes("position", "uv")
 	r.spriteShader.RegisterUniforms("modelview", "projection", "x1x2x4x3",
-		"alpha", "tint", "mask", "neg", "gray", "add", "mult", "isFlat", "isRgba", "isTrapez", "hue")
+		"alpha", "tint", "mask", "neg", "gray", "add", "mult", "isFlat", "isRgba", "isTrapez", "hue", "spriteUV", "palUV")
 	r.spriteShader.RegisterTextures("pal", "tex")
 	if r.enableModel {
 		if err := r.InitModelShader(); err != nil {
@@ -617,7 +627,6 @@ func (r *Renderer_GL21) Init() {
 	gl.BindRenderbuffer(gl.RENDERBUFFER, 0)
 	if sys.msaa > 0 {
 		r.fbo_f_texture = r.newTexture(sys.scrrect[2], sys.scrrect[3], 32, false).(*Texture_GL21)
-		r.fbo_f_texture.SetData(nil)
 	} else {
 		//r.rbo_depth = gl.CreateRenderbuffer()
 		//gl.BindRenderbuffer(gl.RENDERBUFFER, r.rbo_depth)
@@ -701,6 +710,10 @@ func (r *Renderer_GL21) BeginFrame(clearColor bool) {
 	} else {
 		gl.Clear(gl.DEPTH_BUFFER_BIT)
 	}
+	r.program = math.MaxUint32
+	for i := 0; i < len(r.textures); i++ {
+		r.textures[i] = 0
+	}
 }
 
 func (r *Renderer_GL21) BlendReset() {
@@ -736,6 +749,7 @@ func (r *Renderer_GL21) EndFrame() {
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 	}
 	gl.ActiveTexture(gl.TEXTURE0) // later referred to by Texture_GL
+	r.textureIndex = 0
 
 	fbo_texture := r.fbo_texture
 	if sys.msaa > 0 {
@@ -755,16 +769,16 @@ func (r *Renderer_GL21) EndFrame() {
 			gl.BindFramebuffer(gl.FRAMEBUFFER, r.fbo_pp[0])
 			if i == 0 {
 				// first pass, use fbo_texture
-				gl.BindTexture(gl.TEXTURE_2D, fbo_texture)
+				r.BindCurrent2DTexture(fbo_texture)
 			} else {
 				// not the first pass, use the second post-processing FBO
-				gl.BindTexture(gl.TEXTURE_2D, r.fbo_pp_texture[1])
+				r.BindCurrent2DTexture(r.fbo_pp_texture[1])
 			}
 		} else {
 			// pong! our second post-processing FBO is the output
 			gl.BindFramebuffer(gl.FRAMEBUFFER, r.fbo_pp[1])
 			// our first post-processing FBO is the input
-			gl.BindTexture(gl.TEXTURE_2D, r.fbo_pp_texture[0])
+			r.BindCurrent2DTexture(r.fbo_pp_texture[0])
 		}
 
 		if i >= len(r.postShaderSelect)-1 {
@@ -892,7 +906,13 @@ func (r *Renderer_GL21) SetBlending(eq BlendEquation, src, dst BlendFunc) {
 }
 
 func (r *Renderer_GL21) SetPipeline(eq BlendEquation, src, dst BlendFunc) {
-	gl.UseProgram(r.spriteShader.program)
+	if r.program != r.spriteShader.program {
+		r.program = r.spriteShader.program
+		for i := 0; i < len(r.textures); i++ {
+			r.textures[i] = 0
+		}
+		gl.UseProgram(r.spriteShader.program)
+	}
 
 	gl.BlendEquation(r.MapBlendEquation(eq))
 	gl.BlendFunc(r.MapBlendFunction(src), r.MapBlendFunction(dst))
@@ -917,7 +937,10 @@ func (r *Renderer_GL21) ReleasePipeline() {
 }
 
 func (r *Renderer_GL21) prepareShadowMapPipeline(bufferIndex uint32) {
-	gl.UseProgram(r.shadowMapShader.program)
+	if r.program != r.shadowMapShader.program {
+		r.program = r.shadowMapShader.program
+		gl.UseProgram(r.shadowMapShader.program)
+	}
 	gl.BindFramebufferEXT(gl.FRAMEBUFFER, r.fbo_shadow)
 	gl.Viewport(0, 0, 1024, 1024)
 	gl.Enable(gl.TEXTURE_2D)
@@ -1068,7 +1091,10 @@ func (r *Renderer_GL21) ReleaseShadowPipeline() {
 	r.useJoint1 = false
 }
 func (r *Renderer_GL21) prepareModelPipeline(bufferIndex uint32, env *Environment) {
-	gl.UseProgram(r.modelShader.program)
+	if r.program != r.modelShader.program {
+		r.program = r.modelShader.program
+		gl.UseProgram(r.modelShader.program)
+	}
 	gl.BindFramebuffer(gl.FRAMEBUFFER, r.fbo)
 	gl.Viewport(0, 0, sys.scrrect[2], sys.scrrect[3])
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
@@ -1102,24 +1128,28 @@ func (r *Renderer_GL21) prepareModelPipeline(bufferIndex uint32, env *Environmen
 	if r.enableShadow {
 		for i := 0; i < 4; i++ {
 			loc, unit := r.modelShader.u["shadowCubeMap["+strconv.Itoa(i)+"]"], r.modelShader.t["shadowCubeMap["+strconv.Itoa(i)+"]"]
-			gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-			gl.BindTexture(gl.TEXTURE_CUBE_MAP, r.fbo_shadow_cube_texture[i])
-			gl.Uniform1i(loc, int32(unit))
+			switched := r.BindCubeTexture(unit, r.fbo_shadow_cube_texture[i])
+			if switched {
+				gl.Uniform1i(loc, int32(unit))
+			}
 		}
 	}
 	if env != nil {
 		loc, unit := r.modelShader.u["lambertianEnvSampler"], r.modelShader.t["lambertianEnvSampler"]
-		gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-		gl.BindTexture(gl.TEXTURE_CUBE_MAP, env.lambertianTexture.tex.(*Texture_GL21).handle)
-		gl.Uniform1i(loc, int32(unit))
+		switched := r.BindCubeTexture(unit, env.lambertianTexture.tex.(*Texture_GL21).handle)
+		if switched {
+			gl.Uniform1i(loc, int32(unit))
+		}
 		loc, unit = r.modelShader.u["GGXEnvSampler"], r.modelShader.t["GGXEnvSampler"]
-		gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-		gl.BindTexture(gl.TEXTURE_CUBE_MAP, env.GGXTexture.tex.(*Texture_GL21).handle)
-		gl.Uniform1i(loc, int32(unit))
+		switched = r.BindCubeTexture(unit, env.GGXTexture.tex.(*Texture_GL21).handle)
+		if switched {
+			gl.Uniform1i(loc, int32(unit))
+		}
 		loc, unit = r.modelShader.u["GGXLUT"], r.modelShader.t["GGXLUT"]
-		gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-		gl.BindTexture(gl.TEXTURE_2D, env.GGXLUT.tex.(*Texture_GL21).handle)
-		gl.Uniform1i(loc, int32(unit))
+		switched = r.Bind2DTexture(unit, env.GGXLUT.tex.(*Texture_GL21).handle)
+		if switched {
+			gl.Uniform1i(loc, int32(unit))
+		}
 
 		loc = r.modelShader.u["environmentIntensity"]
 		gl.Uniform1f(loc, env.environmentIntensity)
@@ -1132,17 +1162,20 @@ func (r *Renderer_GL21) prepareModelPipeline(bufferIndex uint32, env *Environmen
 
 	} else {
 		loc, unit := r.modelShader.u["lambertianEnvSampler"], r.modelShader.t["lambertianEnvSampler"]
-		gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-		gl.BindTexture(gl.TEXTURE_CUBE_MAP, 0)
-		gl.Uniform1i(loc, int32(unit))
+		switched := r.BindCubeTexture(unit, 0)
+		if switched {
+			gl.Uniform1i(loc, int32(unit))
+		}
 		loc, unit = r.modelShader.u["GGXEnvSampler"], r.modelShader.t["GGXEnvSampler"]
-		gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-		gl.BindTexture(gl.TEXTURE_CUBE_MAP, 0)
-		gl.Uniform1i(loc, int32(unit))
+		switched = r.BindCubeTexture(unit, 0)
+		if switched {
+			gl.Uniform1i(loc, int32(unit))
+		}
 		loc, unit = r.modelShader.u["GGXLUT"], r.modelShader.t["GGXLUT"]
-		gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-		gl.BindTexture(gl.TEXTURE_2D, 0)
-		gl.Uniform1i(loc, int32(unit))
+		switched = r.Bind2DTexture(unit, 0)
+		if switched {
+			gl.Uniform1i(loc, int32(unit))
+		}
 		loc = r.modelShader.u["environmentIntensity"]
 		gl.Uniform1f(loc, 0)
 	}
@@ -1382,9 +1415,17 @@ func (r *Renderer_GL21) SetUniformMatrix(name string, value []float32) {
 func (r *Renderer_GL21) SetTexture(name string, tex Texture) {
 	t := tex.(*Texture_GL21)
 	loc, unit := r.spriteShader.u[name], r.spriteShader.t[name]
-	gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
-	gl.Uniform1i(loc, int32(unit))
+	switched := r.Bind2DTexture(unit, t.handle)
+	if switched {
+		gl.Uniform1i(loc, int32(unit))
+	}
+	if name == "tex" {
+		loc := r.spriteShader.u["spriteUV"]
+		gl.Uniform4f(loc, t.uvst[0], t.uvst[1], t.uvst[2], t.uvst[3])
+	} else if name == "pal" {
+		loc := r.spriteShader.u["palUV"]
+		gl.Uniform4f(loc, t.uvst[0], t.uvst[1], t.uvst[2], t.uvst[3])
+	}
 }
 
 func (r *Renderer_GL21) SetModelUniformI(name string, val int) {
@@ -1431,9 +1472,10 @@ func (r *Renderer_GL21) SetModelUniformMatrix3(name string, value []float32) {
 func (r *Renderer_GL21) SetModelTexture(name string, tex Texture) {
 	t := tex.(*Texture_GL21)
 	loc, unit := r.modelShader.u[name], r.modelShader.t[name]
-	gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
-	gl.Uniform1i(loc, int32(unit))
+	switched := r.Bind2DTexture(unit, t.handle)
+	if switched {
+		gl.Uniform1i(loc, int32(unit))
+	}
 }
 
 func (r *Renderer_GL21) SetShadowMapUniformI(name string, val int) {
@@ -1480,9 +1522,10 @@ func (r *Renderer_GL21) SetShadowMapUniformMatrix3(name string, value []float32)
 func (r *Renderer_GL21) SetShadowMapTexture(name string, tex Texture) {
 	t := tex.(*Texture_GL21)
 	loc, unit := r.shadowMapShader.u[name], r.shadowMapShader.t[name]
-	gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-	gl.BindTexture(gl.TEXTURE_2D, t.handle)
-	gl.Uniform1i(loc, int32(unit))
+	switched := r.Bind2DTexture(unit, t.handle)
+	if switched {
+		gl.Uniform1i(loc, int32(unit))
+	}
 }
 
 func (r *Renderer_GL21) SetShadowFrameTexture(i uint32) {
@@ -1537,9 +1580,10 @@ func (r *Renderer_GL21) RenderCubeMap(envTex Texture, cubeTex Texture) {
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vertexBuffer)
 	gl.BufferData(gl.ARRAY_BUFFER, len(data), unsafe.Pointer(&data[0]), gl.STATIC_DRAW)
 	loc, unit := r.panoramaToCubeMapShader.u["panorama"], r.panoramaToCubeMapShader.t["panorama"]
-	gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-	gl.BindTexture(gl.TEXTURE_2D, envTexture.handle)
-	gl.Uniform1i(loc, int32(unit))
+	switched := r.Bind2DTexture(unit, envTexture.handle)
+	if switched {
+		gl.Uniform1i(loc, int32(unit))
+	}
 	for i := 0; i < 6; i++ {
 		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, uint32(gl.TEXTURE_CUBE_MAP_POSITIVE_X+i), cubeTexture.handle, 0)
 
@@ -1568,9 +1612,10 @@ func (r *Renderer_GL21) RenderFilteredCubeMap(distribution int32, cubeTex Textur
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vertexBuffer)
 	gl.BufferData(gl.ARRAY_BUFFER, len(data), unsafe.Pointer(&data[0]), gl.STATIC_DRAW)
 	loc, unit := r.cubemapFilteringShader.u["cubeMap"], r.cubemapFilteringShader.t["cubeMap"]
-	gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-	gl.BindTexture(gl.TEXTURE_CUBE_MAP, cubeTexture.handle)
-	gl.Uniform1i(loc, int32(unit))
+	switched := r.BindCubeTexture(unit, cubeTexture.handle)
+	if switched {
+		gl.Uniform1i(loc, int32(unit))
+	}
 	loc = r.cubemapFilteringShader.u["sampleCount"]
 	gl.Uniform1i(loc, sampleCount)
 	loc = r.cubemapFilteringShader.u["distribution"]
@@ -1608,9 +1653,10 @@ func (r *Renderer_GL21) RenderLUT(distribution int32, cubeTex Texture, lutTex Te
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vertexBuffer)
 	gl.BufferData(gl.ARRAY_BUFFER, len(data), unsafe.Pointer(&data[0]), gl.STATIC_DRAW)
 	loc, unit := r.cubemapFilteringShader.u["cubeMap"], r.cubemapFilteringShader.t["cubeMap"]
-	gl.ActiveTexture((uint32(gl.TEXTURE0 + unit)))
-	gl.BindTexture(gl.TEXTURE_CUBE_MAP, cubeTexture.handle)
-	gl.Uniform1i(loc, int32(unit))
+	switched := r.BindCubeTexture(unit, cubeTexture.handle)
+	if switched {
+		gl.Uniform1i(loc, int32(unit))
+	}
 	loc = r.cubemapFilteringShader.u["sampleCount"]
 	gl.Uniform1i(loc, sampleCount)
 	loc = r.cubemapFilteringShader.u["distribution"]
@@ -1626,7 +1672,7 @@ func (r *Renderer_GL21) RenderLUT(distribution int32, cubeTex Texture, lutTex Te
 	loc = r.cubemapFilteringShader.u["isLUT"]
 	gl.Uniform1i(loc, 1)
 
-	gl.BindTexture(gl.TEXTURE_2D, lutTexture.handle)
+	r.BindCurrent2DTexture(lutTexture.handle)
 	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F_ARB, lutTexture.width, lutTexture.height, 0, gl.RGBA, gl.FLOAT, nil)
 
 	gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lutTexture.handle, 0)
@@ -1649,4 +1695,48 @@ func (r *Renderer_GL21) NewWorkerThread() bool {
 }
 
 func (r *Renderer_GL21) SetVSync() {
+}
+
+func (r *Renderer_GL21) Bind2DTexture(index int, tex uint32) bool {
+	if r.textures[index] != tex || tex == 0 {
+		r.textures[index] = tex
+		if r.textureIndex != index {
+			r.textureIndex = index
+			gl.ActiveTexture(uint32(gl.TEXTURE0 + index))
+		}
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+		return true
+	}
+	return false
+}
+
+func (r *Renderer_GL21) BindCubeTexture(index int, tex uint32) bool {
+	if r.textures[index] != tex || tex == 0 {
+		r.textures[index] = tex
+		if r.textureIndex != index {
+			r.textureIndex = index
+			gl.ActiveTexture(uint32(gl.TEXTURE0 + index))
+		}
+		gl.BindTexture(gl.TEXTURE_CUBE_MAP, tex)
+		return true
+	}
+	return false
+}
+
+func (r *Renderer_GL21) BindCurrent2DTexture(tex uint32) bool {
+	if r.textures[r.textureIndex] != tex {
+		r.textures[r.textureIndex] = tex
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+		return true
+	}
+	return false
+}
+
+func (r *Renderer_GL21) BindCurrentCubeTexture(tex uint32) bool {
+	if r.textures[r.textureIndex] != tex {
+		r.textures[r.textureIndex] = tex
+		gl.BindTexture(gl.TEXTURE_CUBE_MAP, tex)
+		return true
+	}
+	return false
 }

@@ -115,7 +115,11 @@ func (f *Font_GL32) Printf(x, y float32, scale float32, align int32, blend bool,
 
 	// Activate corresponding render state
 	program := gfxFont.(*FontRenderer_GL32).shaderProgram
-	gl.UseProgram(program.program)
+
+	if gfx.(*Renderer_GL32).program != program.program {
+		gfx.(*Renderer_GL32).program = program.program
+		gl.UseProgram(program.program)
+	}
 	//set text color
 	gl.Uniform4f(program.u["textColor"], f.color.r, f.color.g, f.color.b, f.color.a)
 	//set screen resolution
@@ -187,8 +191,6 @@ func (f *Font_GL32) Printf(x, y float32, scale float32, align int32, blend bool,
 
 	//clear opengl textures and programs
 	gl.BindVertexArray(0)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
-	gl.UseProgram(0)
 	gl.Disable(gl.BLEND)
 	gl.Disable(gl.SCISSOR_TEST)
 
@@ -201,12 +203,12 @@ func (f *Font_GL32) renderGlyphBatch(indices []rune, vertices []float32, texture
 	gl.BindBuffer(gl.ARRAY_BUFFER, gfxFont.(*FontRenderer_GL32).vbo)
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.DYNAMIC_DRAW)
 	// Bind the texture
-	gl.BindTexture(gl.TEXTURE_2D, textureID)
+	//gl.BindTexture(gl.TEXTURE_2D, textureID)
+	gfx.(*Renderer_GL32).Bind2DTexture(0, textureID)
 	gl.DrawArrays(gl.TRIANGLES, 0, int32(len(vertices))/4)
 
 	// Unbind the buffer and texture
 	// gl.BindBuffer(gl.ARRAY_BUFFER, 0)
-	// gl.BindTexture(gl.TEXTURE_2D, 0)
 }
 
 // Width returns the width of a piece of text in pixels
@@ -327,7 +329,7 @@ func (f *Font_GL32) GenerateGlyphs(low, high rune) error {
 		for uv, ok = f.textures[textureIndex].AddImage(int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), rgba.Pix); !ok; uv, ok = f.textures[textureIndex].AddImage(int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), rgba.Pix) {
 			textureIndex += 1
 			if textureIndex >= len(f.textures) {
-				f.textures = append(f.textures, CreateTextureAtlas(256, 256, 32, true))
+				f.textures = append(f.textures, CreateTextureAtlas(sys.cfg.Video.FontTextureAtlasSize, sys.cfg.Video.FontTextureAtlasSize, 32, true))
 			}
 		}
 
@@ -350,7 +352,6 @@ func (f *Font_GL32) GenerateGlyphs(low, high rune) error {
 		f.fontChar[ch] = char
 	}
 
-	gl.BindTexture(gl.TEXTURE_2D, 0)
 	return nil
 }
 

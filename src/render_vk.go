@@ -3,7 +3,6 @@
 package main
 
 import (
-	"container/list"
 	"embed" // Support for go:embed resources
 	"fmt"
 	"io"
@@ -135,22 +134,10 @@ func (r *Renderer_VK) newCubeMapTexture(widthHeight int32, mipmap bool, lowestMi
 	return t
 }
 
-func (r *Renderer_VK) newPaletteTexture() Texture {
-	t := &Texture_VK{256, 1, 32, false, 1, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, nil, nil, nil}
-	if r.palTexture.emptySlot.Len() == 0 {
-		r.addPalTexture()
-	}
-	slot := r.palTexture.emptySlot.Remove(r.palTexture.emptySlot.Front()).([2]uint32)
-	t.offset = [2]int32{int32((slot[1] / r.palTexture.size) * 256), int32(slot[1] % r.palTexture.size)}
-	t.img = r.palTexture.textures[slot[0]].img
-	t.imageView = r.palTexture.textures[slot[0]].imageView
-	t.uvst = [4]float32{
-		(float32(t.offset[0]) + 0.5) / float32(r.palTexture.size),
-		(float32(t.offset[1]) + 0.5) / float32(r.palTexture.size),
-		float32(256) / float32(r.palTexture.size),
-		float32(1) / float32(r.palTexture.size),
-	}
-
+func (r *Renderer_VK) newPaletteTexture(slot [2]uint32, offset [2]int32, uvst [4]float32) Texture {
+	t := &Texture_VK{256, 1, 32, false, 1, offset, uvst, nil, nil, nil}
+	t.img = (*(sys.palTexture.textures[slot[0]])).(*Texture_VK).img
+	t.imageView = (*(sys.palTexture.textures[slot[0]])).(*Texture_VK).imageView
 	runtime.SetFinalizer(t, func(t *Texture_VK) {
 		r.destroyResourceQueues[r.destroyResourceQueueIndex] <- VulkanResource{
 			VulkanResourceTypePaletteTexture,
@@ -159,6 +146,11 @@ func (r *Renderer_VK) newPaletteTexture() Texture {
 			},
 		}
 	})
+	return t
+}
+
+func (r *Renderer_VK) newSubTexture(tex Texture, width, height int32, uvst [4]float32) Texture {
+	t := &Texture_VK{width, height, tex.(*Texture_VK).depth, tex.(*Texture_VK).filter, 1, [2]int32{0, 0}, uvst, tex.(*Texture_VK).img, tex.(*Texture_VK).imageView, nil}
 	return t
 }
 
@@ -702,6 +694,10 @@ func (t *Texture_VK) GetHeight() int32 {
 	return t.height
 }
 
+func (t *Texture_VK) GetUV() [4]float32 {
+	return t.uvst
+}
+
 func (t *Texture_VK) MapInternalFormat(i int32) vk.Format {
 	var InternalFormatLUT = map[int32]vk.Format{
 		8:  vk.FormatR8Unorm,
@@ -768,7 +764,6 @@ type Renderer_VK struct {
 	lutProgram               *VulkanProgramInfo
 	mainRenderTarget         *VulkanRenderTargetInfo
 	renderTargets            [2]*VulkanRenderTargetInfo
-	palTexture               VulkanPalTexture
 	shadowMapTextures        *Texture_VK
 	dummyTexture             *Texture_VK
 	dummyCubeTexture         *Texture_VK
@@ -784,6 +779,7 @@ type Renderer_VK struct {
 }
 
 type VKState struct {
+	batchSize                     uint32
 	currentProgram                *VulkanProgramInfo
 	currentPipeline               vk.Pipeline
 	currentShadowmMapPipeline     vk.Pipeline
@@ -829,12 +825,6 @@ const (
 type VulkanResource struct {
 	resourceType VulkanResourceType
 	resources    []interface{}
-}
-
-type VulkanPalTexture struct {
-	textures  []*Texture_VK
-	size      uint32
-	emptySlot *list.List
 }
 
 type VulkanSpriteTexture struct {
@@ -1472,54 +1462,6 @@ func (r *Renderer_VK) CreateRenderTargetFramebuffer(width, height uint32, attach
 	}
 	return framebuffer
 }
-
-func (r *Renderer_VK) createPalTexture(size uint32) {
-	r.palTexture.size = size
-	r.palTexture.textures = make([]*Texture_VK, 0, 1)
-	r.palTexture.emptySlot = list.New()
-	r.addPalTexture()
-}
-
-func (r *Renderer_VK) addPalTexture() {
-	index := uint32(len(r.palTexture.textures))
-	for i := uint32(0); i < r.palTexture.size; i++ {
-		r.palTexture.emptySlot.PushBack([2]uint32{index, uint32(i)})
-	}
-	t := &Texture_VK{int32(r.palTexture.size), int32(r.palTexture.size), 32, false, 1, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, nil, nil, nil}
-	t.img = r.CreateImage(uint32(t.width), uint32(t.height), vk.FormatR8g8b8a8Unorm, 1, 1, vk.ImageUsageFlags(vk.ImageUsageTransferDstBit|vk.ImageUsageSampledBit), 1, vk.ImageTilingLinear, false)
-	imageMemory := r.AllocateImageMemory(t.img, vk.MemoryPropertyDeviceLocalBit)
-	t.imageView = r.CreateImageView(t.img, vk.FormatR8g8b8a8Unorm, 0, 1, 1, false)
-	r.palTexture.textures = append(r.palTexture.textures, t)
-	runtime.SetFinalizer(t, func(t *Texture_VK) {
-		r.destroyResourceQueues[r.destroyResourceQueueIndex] <- VulkanResource{
-			VulkanResourceTypeTexture,
-			[]interface{}{
-				t.img, t.imageView, imageMemory,
-			},
-		}
-	})
-
-	commandBuffer := r.BeginSingleTimeCommands()
-	barrier := vk.ImageMemoryBarrier{
-		SType:               vk.StructureTypeImageMemoryBarrier,
-		OldLayout:           vk.ImageLayoutUndefined,
-		NewLayout:           vk.ImageLayoutShaderReadOnlyOptimal,
-		SrcAccessMask:       vk.AccessFlags(vk.AccessNone),
-		DstAccessMask:       vk.AccessFlags(vk.AccessShaderReadBit),
-		SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
-		DstQueueFamilyIndex: vk.QueueFamilyIgnored,
-		Image:               t.img,
-		SubresourceRange: vk.ImageSubresourceRange{
-			AspectMask:     vk.ImageAspectFlags(vk.ImageAspectColorBit),
-			BaseMipLevel:   0,
-			LevelCount:     1,
-			BaseArrayLayer: 0,
-			LayerCount:     1,
-		},
-	}
-	vk.CmdPipelineBarrier(commandBuffer, vk.PipelineStageFlags(vk.PipelineStageTopOfPipeBit), vk.PipelineStageFlags(vk.PipelineStageFragmentShaderBit), 0, 0, nil, 0, nil, 1, []vk.ImageMemoryBarrier{barrier})
-	r.EndSingleTimeCommands(commandBuffer)
-}
 func (r *Renderer_VK) createShadowMapTexture(widthHeight int32) *Texture_VK {
 	t := &Texture_VK{widthHeight, widthHeight, 96, false, 1, [2]int32{0, 0}, [4]float32{0, 0, 1, 1}, nil, nil, nil}
 	t.sampler = r.GetSampler(VulkanSamplerInfo{TextureSamplingFilterNearest, TextureSamplingFilterNearest, TextureSamplingWrapClampToEdge, TextureSamplingWrapClampToEdge})
@@ -1954,11 +1896,11 @@ func (r *Renderer_VK) CreateSpriteProgram() (*VulkanProgramInfo, error) {
 		return nil, err
 	}
 	pushConstantRanges := []vk.PushConstantRange{
-		// palUV
+		// spriteUV, palUV
 		{
 			StageFlags: vk.ShaderStageFlags(vk.ShaderStageFragmentBit),
 			Offset:     0,
-			Size:       16,
+			Size:       32,
 		},
 	}
 	pipelineLayoutCreateInfo := vk.PipelineLayoutCreateInfo{
@@ -1986,8 +1928,9 @@ func (r *Renderer_VK) CreateSpriteProgram() (*VulkanProgramInfo, error) {
 		PDynamicStates:    dynamicStates,
 	}
 	inputAssemblyState := vk.PipelineInputAssemblyStateCreateInfo{
-		SType:                  vk.StructureTypePipelineInputAssemblyStateCreateInfo,
-		Topology:               vk.PrimitiveTopologyTriangleStrip,
+		SType:    vk.StructureTypePipelineInputAssemblyStateCreateInfo,
+		Topology: vk.PrimitiveTopologyTriangleStrip,
+		//Topology:               vk.PrimitiveTopologyTriangleList,
 		PrimitiveRestartEnable: vk.False,
 	}
 	vertexInputBindings := []vk.VertexInputBindingDescription{{
@@ -2913,11 +2856,6 @@ func (r *Renderer_VK) GetModelPipeline(state *VulkanPipelineState) vk.Pipeline {
 			ConstantID: 10,
 			Size:       4,
 			Offset:     16,
-		},
-		{
-			ConstantID: 11,
-			Size:       4,
-			Offset:     20,
 		},
 	}
 	vertSpecializationInfo := []vk.SpecializationInfo{
@@ -4480,8 +4418,8 @@ func (r *Renderer_VK) Destroy() {
 	r.shadowMapTextures = nil
 	r.dummyTexture = nil
 	r.dummyCubeTexture = nil
-	for i := range r.palTexture.textures {
-		r.palTexture.textures[i] = nil
+	for i := range sys.palTexture.textures {
+		sys.palTexture.textures[i] = nil
 	}
 
 	//Save Vulkan pipeline cache to disk
@@ -4802,7 +4740,6 @@ func (r *Renderer_VK) Init() {
 	r.dummyCubeTexture.sampler = r.spriteSamplers[0]
 
 	r.spriteProgram.uniformOffsetMap = map[interface{}]uint32{}
-	r.createPalTexture(2048)
 	r.shadowMapTextures = r.createShadowMapTexture(1024)
 	if r.enableModel {
 		r.modelProgram, err = r.CreateModelProgram()
@@ -4845,7 +4782,7 @@ func (r *Renderer_VK) DestroyResources(queueLength int) {
 				vk.FreeMemory(r.device, res.resources[2].(vk.DeviceMemory), nil)
 				break
 			case VulkanResourceTypePaletteTexture:
-				r.palTexture.emptySlot.PushFront(res.resources[0])
+				sys.palTexture.emptySlot.PushFront(res.resources[0])
 				break
 			case VulkanResourceTypeBuffer:
 				vk.DestroyBuffer(r.device, res.resources[0].(vk.Buffer), nil)
@@ -5002,6 +4939,7 @@ func (r *Renderer_VK) BeginFrame(clearColor bool) {
 	r.VKState.palTexture = r.dummyTexture
 	r.modelProgram.uniformOffsetMap = make(map[interface{}]uint32)
 	r.modelProgram.uniformBufferOffset = 0
+	r.VKState.batchSize = 0
 }
 
 func (r *Renderer_VK) BlendReset() {
@@ -6126,6 +6064,9 @@ func (r *Renderer_VK) SetModelIndexData(bufferIndex uint32, values ...uint32) {
 	vk.DestroyBuffer(r.device, stagingBuffer, nil)
 	vk.FreeMemory(r.device, stagingBufferMemory, nil)
 }
+func (r *Renderer_VK) FlushBatchDraws() {
+	vk.CmdDraw(r.commandBuffers[0], 6*r.batchSize, 1, uint32(r.vertexBufferOffset%r.vertexBuffers[0].size)/16-4, 0)
+}
 
 func (r *Renderer_VK) RenderQuad() {
 	switchedProgram := r.VKState.currentProgram != r.spriteProgram
@@ -6219,32 +6160,38 @@ func (r *Renderer_VK) RenderQuad() {
 			PBufferInfo:     fragUniformInfo,
 		})
 	}
-	if switchedProgram || r.VKState.spriteTexture != r.currentSpriteTexture.spriteTexture {
+	if switchedProgram || r.VKState.spriteTexture != r.currentSpriteTexture.spriteTexture || runtime.GOOS == "darwin" {
+		if switchedProgram || r.VKState.spriteTexture.img != r.currentSpriteTexture.spriteTexture.img || r.VKState.spriteTexture.uvst[0] != r.currentSpriteTexture.spriteTexture.uvst[0] || r.VKState.spriteTexture.uvst[1] != r.currentSpriteTexture.spriteTexture.uvst[1] || runtime.GOOS == "darwin" {
+			uvst := r.VKState.spriteTexture.uvst
+			vk.CmdPushConstants(r.commandBuffers[0], r.spriteProgram.pipelineLayout, vk.ShaderStageFlags(vk.ShaderStageFragmentBit), 0, 16, unsafe.Pointer(&uvst))
+		}
+		if switchedProgram || r.VKState.spriteTexture.img != r.currentSpriteTexture.spriteTexture.img {
+			imageInfo := []vk.DescriptorImageInfo{
+				{
+					ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
+					ImageView:   r.VKState.spriteTexture.imageView,
+					Sampler:     r.spriteSamplers[0],
+				},
+			}
+			if r.VKState.spriteTexture.filter {
+				imageInfo[0].Sampler = r.spriteSamplers[1]
+			}
+			descriptorWrites = append(descriptorWrites, vk.WriteDescriptorSet{
+				SType:           vk.StructureTypeWriteDescriptorSet,
+				DstBinding:      2,
+				DstArrayElement: 0,
+				DescriptorCount: 1,
+				DescriptorType:  vk.DescriptorTypeCombinedImageSampler,
+				PImageInfo:      imageInfo,
+			})
+		}
 		r.currentSpriteTexture.spriteTexture = r.VKState.spriteTexture
-		imageInfo := []vk.DescriptorImageInfo{
-			{
-				ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
-				ImageView:   r.VKState.spriteTexture.imageView,
-				Sampler:     r.spriteSamplers[0],
-			},
-		}
-		if r.spriteTexture.filter {
-			imageInfo[0].Sampler = r.spriteSamplers[1]
-		}
-		descriptorWrites = append(descriptorWrites, vk.WriteDescriptorSet{
-			SType:           vk.StructureTypeWriteDescriptorSet,
-			DstBinding:      2,
-			DstArrayElement: 0,
-			DescriptorCount: 1,
-			DescriptorType:  vk.DescriptorTypeCombinedImageSampler,
-			PImageInfo:      imageInfo,
-		})
 	}
 	// MacOS MoltenVK workaround: push constants need to be set every draw call
 	if switchedProgram || r.VKState.palTexture != r.currentSpriteTexture.palTexture || runtime.GOOS == "darwin" {
 		if switchedProgram || r.VKState.palTexture.img != r.currentSpriteTexture.palTexture.img || r.VKState.palTexture.offset[0] != r.currentSpriteTexture.palTexture.offset[0] || r.VKState.palTexture.offset[1] != r.currentSpriteTexture.palTexture.offset[1] || runtime.GOOS == "darwin" {
 			uvst := r.VKState.palTexture.uvst
-			vk.CmdPushConstants(r.commandBuffers[0], r.spriteProgram.pipelineLayout, vk.ShaderStageFlags(vk.ShaderStageFragmentBit), 0, 16, unsafe.Pointer(&uvst))
+			vk.CmdPushConstants(r.commandBuffers[0], r.spriteProgram.pipelineLayout, vk.ShaderStageFlags(vk.ShaderStageFragmentBit), 16, 16, unsafe.Pointer(&uvst))
 		}
 		if switchedProgram || r.VKState.palTexture.img != r.currentSpriteTexture.palTexture.img {
 			palImageInfo := []vk.DescriptorImageInfo{

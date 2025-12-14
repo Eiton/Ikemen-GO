@@ -3773,13 +3773,13 @@ func (c *Char) load(def string) error {
 		sprite_resolved := resolvePathRelativeToDef(sprite)
 		if err := LoadFile(&sprite_resolved, []string{gi.def, "", sys.motifDir, "data/"}, func(filename string) error {
 			var err_sff error
-			gi.sff, err_sff = loadSff(filename, true) // loadSff uses OpenFile
+			gi.sff, err_sff = loadSff(filename, SffTypeChar) // loadSff uses OpenFile
 			return err_sff
 		}); err != nil {
 			return err
 		}
 	} else {
-		gi.sff = newSff()
+		gi.sff = newSff(SffTypeChar)
 	}
 	gi.palettedata = newPaldata()
 	gi.palettedata.palList = PaletteList{

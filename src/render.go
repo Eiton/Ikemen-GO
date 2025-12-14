@@ -16,7 +16,14 @@ type Texture interface {
 	IsValid() bool
 	GetWidth() int32
 	GetHeight() int32
+	GetUV() [4]float32
 	CopyData(src *Texture)
+}
+
+type PalTexture struct {
+	textures  []*Texture
+	size      uint32
+	emptySlot *list.List
 }
 
 type Renderer interface {
@@ -41,7 +48,8 @@ type Renderer interface {
 	SetMeshOulinePipeline(invertFrontFace bool, meshOutline float32)
 	ReleaseModelPipeline()
 	newTexture(width, height, depth int32, filter bool) (t Texture)
-	newPaletteTexture() (t Texture)
+	newPaletteTexture(slot [2]uint32, offset [2]int32, uvst [4]float32) (t Texture)
+	newSubTexture(tex Texture, width, height int32, uvst [4]float32) (t Texture)
 	newModelTexture(width, height, depth int32, filter bool) (t Texture)
 	newDataTexture(width, height int32) (t Texture)
 	newHDRTexture(width, height int32) (t Texture)
@@ -211,14 +219,14 @@ func (rp *RenderParams) IsValid() bool {
 		IsFinite(rp.x+rp.y+rp.xts+rp.xbs+rp.ys+rp.vs+rp.rxadd+rp.rot.angle+rp.rcx+rp.rcy)
 }
 
-func drawQuads(modelview mgl.Mat4, x1, y1, x2, y2, x3, y3, x4, y4 float32) {
+func drawQuads(modelview mgl.Mat4, x1, y1, x2, y2, x3, y3, x4, y4 float32, uvst [4]float32) {
 	gfx.SetUniformMatrix("modelview", modelview[:])
 	gfx.SetUniformF("x1x2x4x3", x1, x2, x4, x3) // this uniform is optional
 	gfx.SetVertexData(
-		x2, y2, 1, 1,
-		x3, y3, 1, 0,
-		x1, y1, 0, 1,
-		x4, y4, 0, 0,
+		x2, y2, uvst[2], uvst[3],
+		x3, y3, uvst[2], uvst[1],
+		x1, y1, uvst[0], uvst[3],
+		x4, y4, uvst[0], uvst[1],
 	)
 
 	gfx.RenderQuad()
@@ -347,7 +355,7 @@ func renderSpriteHTile(modelview mgl.Mat4, x1, y1, x2, y2, x3, y3, x4, y4, dy, w
 			mat = mat.Mul4(mgl.Translate3D(-(rp.rcx + float32(n)*botdist), -(rp.rcy + dy), 0))
 		}
 
-		drawQuads(mat, x1d, y1, x2d, y2, x3d, y3, x4d, y4)
+		drawQuads(mat, x1d, y1, x2d, y2, x3d, y3, x4d, y4, rp.tex.GetUV())
 	}
 }
 
@@ -383,7 +391,7 @@ func renderSpriteQuad(modelview mgl.Mat4, rp RenderParams) {
 		modelview = applyRotation(modelview, rp)
 		modelview = modelview.Mul4(mgl.Translate3D(-rp.rcx, -rp.rcy, 0))
 
-		drawQuads(modelview, x1, y1, x2, y2, x3, y3, x4, y4)
+		drawQuads(modelview, x1, y1, x2, y2, x3, y3, x4, y4, rp.tex.GetUV())
 		return
 	}
 	if rp.tile.yflag == 1 && rp.xbs != 0 {
@@ -796,4 +804,42 @@ func (ta *TextureAtlas) Resize(width, height int32) {
 	ta.height = height
 	ta.texture = t
 	return
+}
+
+func CreatePalTexture(size uint32) {
+	sys.palTexture.size = size
+	sys.palTexture.textures = make([]*Texture, 0, 1)
+	sys.palTexture.emptySlot = list.New()
+	AddPalTexture()
+}
+
+func AddPalTexture() {
+	index := uint32(len(sys.palTexture.textures))
+	for i := uint32(0); i < sys.palTexture.size; i++ {
+		sys.palTexture.emptySlot.PushBack([2]uint32{index, uint32(i)})
+	}
+	t := gfx.newTexture(int32(sys.palTexture.size), int32(sys.palTexture.size), 32, false)
+	sys.palTexture.textures = append(sys.palTexture.textures, &t)
+}
+
+func NewPaletteTexture() Texture {
+	if sys.palTexture.emptySlot.Len() == 0 {
+		AddPalTexture()
+	}
+	slot := sys.palTexture.emptySlot.Remove(sys.palTexture.emptySlot.Front()).([2]uint32)
+	offset := [2]int32{int32((slot[1] / sys.palTexture.size) * 256), int32(slot[1] % sys.palTexture.size)}
+	uvst := [4]float32{
+		(float32(offset[0]) + 0.5) / float32(sys.palTexture.size),
+		(float32(offset[1]) + 0.5) / float32(sys.palTexture.size),
+		float32(256) / float32(sys.palTexture.size),
+		float32(1) / float32(sys.palTexture.size),
+	}
+	t := gfx.newPaletteTexture(slot, offset, uvst)
+	return t
+}
+
+type SpriteTextureAtlas struct {
+	textureSize int32
+	textures8   []*TextureAtlas
+	textures32  []*TextureAtlas
 }

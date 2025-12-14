@@ -450,7 +450,7 @@ func (pl *PaletteList) SwapPalMap(palMap *[]int) bool {
 }
 
 func PaletteToTexture(pal []uint32) Texture {
-	tx := gfx.newPaletteTexture()
+	tx := NewPaletteTexture()
 
 	// Safely handle invalid palettes
 	if len(pal) == 0 {
@@ -545,17 +545,18 @@ func (sh *SffHeader) Read(r io.Reader, lofs *uint32, tofs *uint32) error {
 }
 
 type Sprite struct {
-	Pal      []uint32
-	Tex      Texture
-	Group    uint16 // Group index: valid range 0–65535
-	Number   uint16 // Sprite index: valid range 0–65535
-	Size     [2]uint16
-	Offset   [2]int16
-	palidx   int
-	rle      int
-	coldepth byte
-	paltemp  []uint32
-	PalTex   Texture
+	Pal          []uint32
+	Tex          Texture
+	Group        uint16 // Group index: valid range 0–65535
+	Number       uint16 // Sprite index: valid range 0–65535
+	Size         [2]uint16
+	Offset       [2]int16
+	palidx       int
+	rle          int
+	coldepth     byte
+	paltemp      []uint32
+	PalTex       Texture
+	textureAtlas *SpriteTextureAtlas
 }
 
 func (s *Sprite) isBlank() bool {
@@ -729,15 +730,55 @@ func (s *Sprite) SetPxl(px []byte) {
 		return
 	}
 	sys.mainThreadTask <- func() {
-		s.Tex = gfx.newTexture(int32(s.Size[0]), int32(s.Size[1]), 8, false)
-		s.Tex.SetData(px)
+		if s.textureAtlas != nil && int32(s.Size[0]) < s.textureAtlas.textureSize/2 && int32(s.Size[1]) < s.textureAtlas.textureSize/2 {
+			// Pack into texture atlas
+			textureIndex := -1
+			var uv [4]float32
+			for ok := false; !ok; {
+				textureIndex += 1
+				if textureIndex >= len(s.textureAtlas.textures8) {
+					s.textureAtlas.textures8 = append(s.textureAtlas.textures8, CreateTextureAtlas(s.textureAtlas.textureSize, s.textureAtlas.textureSize, 8, false))
+				}
+				uv, ok = s.textureAtlas.textures8[textureIndex].AddImage(int32(s.Size[0]), int32(s.Size[1]), px)
+			}
+			s.Tex = gfx.newSubTexture(s.textureAtlas.textures8[textureIndex].texture, int32(s.Size[0]), int32(s.Size[1]), uv)
+		} else {
+			s.Tex = gfx.newTexture(int32(s.Size[0]), int32(s.Size[1]), 8, false)
+			s.Tex.SetData(px)
+		}
 	}
 }
 
 func (s *Sprite) SetRaw(data []byte, sprWidth int32, sprHeight int32, sprDepth int32) {
 	sys.mainThreadTask <- func() {
-		s.Tex = gfx.newTexture(sprWidth, sprHeight, sprDepth, sys.cfg.Video.RGBSpriteBilinearFilter)
-		s.Tex.SetData(data)
+		if s.textureAtlas != nil && int32(sprWidth) < s.textureAtlas.textureSize/2 && int32(sprHeight) < s.textureAtlas.textureSize/2 {
+			// Pack into texture atlas
+			var data32 []byte
+			if sprDepth == 24 {
+				data32 = make([]byte, 0, sprWidth*sprHeight*4)
+				for i, val := range data {
+					data32 = append(data32, val)
+					if (i+1)%3 == 0 {
+						data32 = append(data32, 255)
+					}
+				}
+			} else {
+				data32 = data
+			}
+			textureIndex := -1
+			var uv [4]float32
+			for ok := false; !ok; {
+				textureIndex += 1
+				if textureIndex >= len(s.textureAtlas.textures32) {
+					s.textureAtlas.textures32 = append(s.textureAtlas.textures32, CreateTextureAtlas(s.textureAtlas.textureSize, s.textureAtlas.textureSize, 32, sys.cfg.Video.RGBSpriteBilinearFilter))
+				}
+				uv, ok = s.textureAtlas.textures32[textureIndex].AddImage(sprWidth, sprHeight, data32)
+			}
+			s.Tex = gfx.newSubTexture(s.textureAtlas.textures32[textureIndex].texture, sprWidth, sprHeight, uv)
+		} else {
+			s.Tex = gfx.newTexture(sprWidth, sprHeight, sprDepth, sys.cfg.Video.RGBSpriteBilinearFilter)
+			s.Tex.SetData(data)
+		}
 	}
 }
 
@@ -1285,14 +1326,31 @@ type Sff struct {
 	palList PaletteList
 	// This is the sffCache key
 	filename string
+	SpriteTextureAtlas
 }
+
+type SffType int
+
+const (
+	SffTypeChar = SffType(iota)
+	SffTypeLifebar
+	SffTypeFont
+	SffTypeStage
+	SffTypeOther
+)
+
 type Palette struct {
 	palList PaletteList
 }
 
-func newSff() (s *Sff) {
+func newSff(sffType SffType) (s *Sff) {
 	s = &Sff{sprites: make(map[[2]uint16]*Sprite)}
 	s.palList.init()
+	if sffType == SffTypeFont {
+		s.SpriteTextureAtlas.textureSize = sys.cfg.Video.FontTextureAtlasSize
+	} else {
+		s.SpriteTextureAtlas.textureSize = sys.cfg.Video.TextureAtlasSize
+	}
 	for i := uint16(1); i <= uint16(sys.cfg.Config.PaletteMax); i++ {
 		s.palList.PalTable[[...]uint16{1, i}], _ = s.palList.NewPal()
 	}
@@ -1322,14 +1380,14 @@ func removeSFFCache(filename string) {
 	}
 }
 
-func loadSff(filename string, char bool) (*Sff, error) {
+func loadSff(filename string, sffType SffType) (*Sff, error) {
 	// If this SFF is already in the cache, just return a copy
 	if cached, ok := SffCache[filename]; ok {
 		cached.refCount++
 		s := cached.sffData
 		return &s, nil
 	}
-	s := newSff()
+	s := newSff(sffType)
 	s.filename = filename
 	f, err := OpenFile(filename)
 	if err != nil {
@@ -1407,6 +1465,7 @@ func loadSff(filename string, char bool) (*Sff, error) {
 	for i := 0; i < len(spriteList); i++ {
 		f.Seek(shofs, 0)
 		spriteList[i] = newSprite()
+		spriteList[i].textureAtlas = &s.SpriteTextureAtlas
 		var xofs, size uint32
 		var indexOfPrevious uint16
 		switch s.header.Ver0 {
@@ -1611,8 +1670,8 @@ func loadCharPalettes(sff *Sff, filename string, ref int) error {
 	return nil
 }
 
-func preloadSff(filename string, char bool, preloadSpr map[[2]uint16]bool) (*Sff, []int32, error) {
-	sff := newSff()
+func preloadSff(filename string, sffType SffType, preloadSpr map[[2]uint16]bool) (*Sff, []int32, error) {
+	sff := newSff(sffType)
 	f, err := OpenFile(filename)
 	if err != nil {
 		return nil, nil, err
@@ -1668,6 +1727,7 @@ func preloadSff(filename string, char bool, preloadSpr map[[2]uint16]bool) (*Sff
 
 	for i := 0; i < len(spriteList); i++ {
 		spriteList[i] = newSprite()
+		spriteList[i].textureAtlas = &sys.SpriteTextureAtlas
 		f.Seek(int64(shofs), 0)
 		switch h.Ver0 {
 		case 1:
@@ -1869,7 +1929,7 @@ func preloadSff(filename string, char bool, preloadSpr map[[2]uint16]bool) (*Sff
 	// selectable palettes
 	var preSelPal []int32
 	var selPal []int32
-	if h.Ver0 != 1 && char {
+	if h.Ver0 != 1 && sffType == SffTypeChar {
 		for i := 0; i < int(h.NumberOfPalettes); i++ {
 			f.Seek(int64(h.FirstPaletteHeaderOffset)+int64(i*16), 0)
 			var gn_ [3]int16

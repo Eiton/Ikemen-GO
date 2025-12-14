@@ -1716,7 +1716,7 @@ func CopyAnim(a *Anim) *Anim {
 		return nil
 	}
 	srcSff := a.anim.sff
-	copySff := newSff()
+	copySff := newSff(SffTypeOther)
 	// Copy header and palette info
 	copySff.header = srcSff.header
 	copySff.palList.palettes = srcSff.palList.palettes

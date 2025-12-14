@@ -424,7 +424,7 @@ func (f *Font_VK) GenerateGlyphs(low, high rune) error {
 		for uv, ok = f.textures[textureIndex].AddImage(int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), pix); !ok; uv, ok = f.textures[textureIndex].AddImage(int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), pix) {
 			textureIndex += 1
 			if textureIndex >= len(f.textures) {
-				f.textures = append(f.textures, CreateTextureAtlas(256, 256, 8, true))
+				f.textures = append(f.textures, CreateTextureAtlas(sys.cfg.Video.FontTextureAtlasSize, sys.cfg.Video.FontTextureAtlasSize, 8, true))
 				descriptorSet := gfxFont.(*FontRenderer_VK).freeDescriptors.Front()
 				gfxFont.(*FontRenderer_VK).freeDescriptors.Remove(descriptorSet)
 				f.descriptors = append(f.descriptors, descriptorSet)
@@ -490,7 +490,7 @@ func (r *FontRenderer_VK) LoadTrueTypeFont(reader io.Reader, scale int32, low, h
 	f.ttf = ttf
 	f.scale = scale
 	f.SetColor(1.0, 1.0, 1.0, 1.0) //set default white
-	f.textures = append(f.textures, CreateTextureAtlas(256, 256, 8, true))
+	f.textures = append(f.textures, CreateTextureAtlas(sys.cfg.Video.FontTextureAtlasSize, sys.cfg.Video.FontTextureAtlasSize, 8, true))
 	descriptorSet := r.freeDescriptors.Front()
 	r.freeDescriptors.Remove(descriptorSet)
 	f.descriptors = append(f.descriptors, descriptorSet)

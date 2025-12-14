@@ -324,7 +324,7 @@ func (f *Font_GL21) GenerateGlyphs(low, high rune) error {
 		for uv, ok = f.textures[textureIndex].AddImage(int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), rgba.Pix); !ok; uv, ok = f.textures[textureIndex].AddImage(int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy()), rgba.Pix) {
 			textureIndex += 1
 			if textureIndex >= len(f.textures) {
-				f.textures = append(f.textures, CreateTextureAtlas(256, 256, 32, true))
+				f.textures = append(f.textures, CreateTextureAtlas(sys.cfg.Video.FontTextureAtlasSize, sys.cfg.Video.FontTextureAtlasSize, 32, true))
 			}
 		}
 
@@ -370,7 +370,7 @@ func (r *FontRenderer_GL21) LoadTrueTypeFont(reader io.Reader, scale int32, low,
 	f.ttf = ttf
 	f.scale = scale
 	f.SetColor(1.0, 1.0, 1.0, 1.0) //set default white
-	f.textures = append(f.textures, CreateTextureAtlas(256, 256, 32, true))
+	f.textures = append(f.textures, CreateTextureAtlas(sys.cfg.Video.FontTextureAtlasSize, sys.cfg.Video.FontTextureAtlasSize, 32, true))
 
 	err = f.GenerateGlyphs(low, high)
 	if err != nil {

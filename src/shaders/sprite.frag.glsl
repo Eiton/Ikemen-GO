@@ -10,6 +10,7 @@ layout(binding = 1) uniform UniformBufferObject  {
 	bool isFlat, isRgba, isTrapez, neg;
 };
 layout(push_constant, std430) uniform u {
+	vec4 spriteUV;
 	vec4 palUV;
 };
 layout(binding = 2) uniform sampler2D tex;
@@ -35,7 +36,8 @@ uniform vec3 add, mult;
 uniform float alpha, gray, hue;
 uniform int mask;
 uniform bool isFlat, isRgba, isTrapez, neg;
-
+uniform vec4 spriteUV;
+uniform vec4 palUV;
 COMPAT_VARYING vec2 texcoord;
 #endif
 
@@ -54,6 +56,8 @@ void main(void) {
 		FragColor = tint;
 	} else {
 		vec2 uv = texcoord;
+		uv[0] = clamp(uv[0],spriteUV[0],spriteUV[2]-0.0001);
+		uv[1] = clamp(uv[1],spriteUV[1],spriteUV[3]-0.0001);
 		if (isTrapez) {
 			// Compute left/right trapezoid bounds at height uv.y
 			vec2 bounds = mix(x1x2x4x3.zw, x1x2x4x3.xy, uv.y);
@@ -74,11 +78,7 @@ void main(void) {
 			final_add *= c.a;
 			final_mul.rgb *= alpha;
 		} else {
-			#if __VERSION__ >= 450
 			c = COMPAT_TEXTURE(pal, vec2(palUV[0]+palUV[2]*c.r*0.9966, palUV[1]));
-			#else
-			c = COMPAT_TEXTURE(pal, vec2(c.r*0.9966, 0.5));
-			#endif
 			if (mask == -1) {
 				c.a = 1.0;
 			}

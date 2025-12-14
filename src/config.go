@@ -177,6 +177,8 @@ type Config struct {
 		RendererDebugMode       bool     `ini:"RendererDebugMode"`
 		EnableModel             bool     `ini:"EnableModel"`
 		EnableModelShadow       bool     `ini:"EnableModelShadow"`
+		TextureAtlasSize        int32    `ini:"TextureAtlasSize"`
+		FontTextureAtlasSize    int32    `ini:"FontTextureAtlasSize"`
 	} `ini:"Video"`
 	Sound struct {
 		SampleRate        int32   `ini:"SampleRate"`
